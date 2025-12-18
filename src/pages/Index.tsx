@@ -6,6 +6,7 @@ import { ExtractedData } from '@/components/ExtractedData';
 import { ResultCanvas, ResultCanvasRef } from '@/components/ResultCanvas';
 import { ProcessingOverlay } from '@/components/ProcessingOverlay';
 import { useToast } from '@/hooks/use-toast';
+import { supabase } from '@/integrations/supabase/client';
 
 interface TableRow {
   qNo: string;
@@ -47,34 +48,15 @@ const Index = () => {
     setResult(null);
   };
 
-  const simulateOCR = async () => {
-    // Simulated OCR result based on the sample image structure
-    // In production, this would call an AI vision API
-    return {
-      headerInfo: {
-        'Exam': 'B.Tech. I SEMESTER REGULAR (A3)',
-        'Month-Year': 'MARCH 2023',
-        'Branch': 'INFORMATION TECHNOLOGY',
-        'SubCode': 'A3CIT201',
-        'SubName': 'Programming for Problem Solving',
-        'Examiner': 'S. Jayavardhan',
-      },
-      tableData: [
-        { qNo: '1', a: '4', b: '4', c: '0', total: '8' },
-        { qNo: '2', a: '', b: '', c: '', total: '' },
-        { qNo: '3', a: '6', b: '0', c: '0', total: '6' },
-        { qNo: '4', a: '', b: '', c: '', total: '' },
-        { qNo: '5', a: '', b: '', c: '', total: '' },
-        { qNo: '6', a: '4', b: '2', c: '0', total: '6' },
-        { qNo: '7', a: '5', b: '2', c: '0', total: '7' },
-        { qNo: '8', a: '', b: '', c: '', total: '' },
-        { qNo: '9', a: '3', b: '1', c: '', total: '4' },
-        { qNo: '10', a: '', b: '', c: '', total: '' },
-      ],
-      writtenTotal: 31,
-      bubbleDigits: 31,
-    };
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
   };
+
 
   const handleExtract = async () => {
     if (!imageFile) {
@@ -90,34 +72,58 @@ const Index = () => {
     setProcessingStage('scanning');
 
     try {
-      // Simulate processing stages
-      await new Promise(r => setTimeout(r, 1500));
+      // Convert image to base64
+      const imageBase64 = await fileToBase64(imageFile);
+      
       setProcessingStage('extracting');
       
-      const ocrResult = await simulateOCR();
-      await new Promise(r => setTimeout(r, 1500));
+      // Call the edge function for real OCR
+      const { data, error } = await supabase.functions.invoke('extract-document', {
+        body: { imageBase64 }
+      });
+
+      if (error) {
+        throw new Error(error.message || 'Failed to extract document');
+      }
+
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
       setProcessingStage('validating');
       
+      // Normalize table data
+      const tableData = (data.tableData || []).map((row: any) => ({
+        qNo: String(row.qNo || ''),
+        a: String(row.a || ''),
+        b: String(row.b || ''),
+        c: String(row.c || ''),
+        total: String(row.total || ''),
+      }));
+
       // Calculate sum from table
-      const calculatedSum = ocrResult.tableData.reduce((sum, row) => {
+      const calculatedSum = tableData.reduce((sum: number, row: TableRow) => {
         const total = parseInt(row.total) || 0;
         return sum + total;
       }, 0);
 
-      await new Promise(r => setTimeout(r, 1000));
+      const writtenTotal = parseInt(data.writtenTotal) || 0;
+      const bubbleDigits = parseInt(data.bubbleDigits) || 0;
+
+      await new Promise(r => setTimeout(r, 500));
       setProcessingStage('complete');
       
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 300));
 
-      const isValid = calculatedSum === ocrResult.bubbleDigits;
+      const isValid = calculatedSum === bubbleDigits;
 
       setResult({
-        headerInfo: ocrResult.headerInfo,
-        tableData: ocrResult.tableData,
+        headerInfo: data.headerInfo || {},
+        tableData,
         totalMarks: {
           calculated: calculatedSum,
-          written: ocrResult.writtenTotal,
-          bubbleDigits: ocrResult.bubbleDigits,
+          written: writtenTotal,
+          bubbleDigits: bubbleDigits,
         },
         isValid,
       });
@@ -131,9 +137,10 @@ const Index = () => {
       });
 
     } catch (error) {
+      console.error('Extraction error:', error);
       toast({
         title: 'Extraction Failed',
-        description: 'Failed to process the document. Please try again.',
+        description: error instanceof Error ? error.message : 'Failed to process the document. Please try again.',
         variant: 'destructive',
       });
     } finally {

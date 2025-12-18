@@ -13,12 +13,35 @@ serve(async (req) => {
   try {
     const { imageBase64 } = await req.json();
     
+    // Validate presence
     if (!imageBase64) {
       return new Response(JSON.stringify({ error: 'No image provided' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
+
+    // Validate base64 format (must be a data URL with image type)
+    const base64Regex = /^data:image\/(jpeg|jpg|png|webp|gif|bmp);base64,/;
+    if (!base64Regex.test(imageBase64)) {
+      return new Response(JSON.stringify({ error: 'Invalid image format. Only JPEG, PNG, WEBP, GIF, and BMP supported.' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Validate size (10MB limit)
+    const base64Data = imageBase64.split(',')[1] || '';
+    const sizeInBytes = Math.ceil(base64Data.length * 0.75);
+    const maxSizeBytes = 10 * 1024 * 1024; // 10MB
+    if (sizeInBytes > maxSizeBytes) {
+      return new Response(JSON.stringify({ error: 'Image too large. Maximum size is 10MB.' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    console.log(`Processing image: ${sizeInBytes} bytes`);
 
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     if (!LOVABLE_API_KEY) {

@@ -20,7 +20,7 @@ interface ResultCanvasProps {
 }
 
 export interface ResultCanvasRef {
-  downloadImage: () => void;
+  downloadImage: (filename?: string) => void;
 }
 
 export const ResultCanvas = forwardRef<ResultCanvasRef, ResultCanvasProps>(
@@ -28,12 +28,13 @@ export const ResultCanvas = forwardRef<ResultCanvasRef, ResultCanvasProps>(
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
     useImperativeHandle(ref, () => ({
-      downloadImage: () => {
+      downloadImage: (filename?: string) => {
         const canvas = canvasRef.current;
         if (!canvas) return;
         
+        const baseName = filename ? filename.replace(/\.[^/.]+$/, '') : 'ocr-result';
         const link = document.createElement('a');
-        link.download = 'ocr-result.png';
+        link.download = `${baseName}-extracted.png`;
         link.href = canvas.toDataURL('image/png');
         link.click();
       }

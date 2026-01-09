@@ -2,6 +2,7 @@ import { Loader2, ScanSearch, Table, Calculator, FileCheck } from 'lucide-react'
 
 interface ProcessingOverlayProps {
   stage: 'scanning' | 'extracting' | 'validating' | 'complete';
+  progress?: { current: number; total: number };
 }
 
 const stages = {
@@ -11,8 +12,10 @@ const stages = {
   complete: { icon: FileCheck, label: 'Processing complete!' },
 };
 
-export const ProcessingOverlay = ({ stage }: ProcessingOverlayProps) => {
+export const ProcessingOverlay = ({ stage, progress }: ProcessingOverlayProps) => {
   const { icon: Icon, label } = stages[stage];
+  const isBatch = progress && progress.total > 1;
+  const progressPercent = progress ? (progress.current / progress.total) * 100 : 60;
 
   return (
     <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center animate-fade-in">
@@ -29,18 +32,25 @@ export const ProcessingOverlay = ({ stage }: ProcessingOverlayProps) => {
         </div>
         
         <div className="text-center">
-          <p className="text-lg font-semibold text-foreground mb-2">{label}</p>
+          <p className="text-lg font-semibold text-foreground mb-2">
+            {isBatch ? `Processing image ${progress.current} of ${progress.total}` : label}
+          </p>
           <p className="text-sm text-muted-foreground">
             {stage === 'complete' 
               ? 'Your results are ready to view'
-              : 'Please wait while we process your document'
+              : isBatch 
+                ? label 
+                : 'Please wait while we process your document'
             }
           </p>
         </div>
 
         {stage !== 'complete' && (
           <div className="w-full h-2 rounded-full bg-secondary overflow-hidden">
-            <div className="h-full bg-primary rounded-full shimmer" style={{ width: '60%' }} />
+            <div 
+              className="h-full bg-primary rounded-full transition-all duration-300" 
+              style={{ width: `${progressPercent}%` }} 
+            />
           </div>
         )}
       </div>

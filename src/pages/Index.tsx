@@ -1,12 +1,13 @@
 import { useState, useRef } from 'react';
-import { FileText, Sparkles, Download, RotateCcw } from 'lucide-react';
+import { FileText, Sparkles, Download, RotateCcw, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { ImageUploader } from '@/components/ImageUploader';
+import { ImageUploader, ImageItem } from '@/components/ImageUploader';
 import { ExtractedData } from '@/components/ExtractedData';
 import { ResultCanvas, ResultCanvasRef } from '@/components/ResultCanvas';
 import { ProcessingOverlay } from '@/components/ProcessingOverlay';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
+import { cn } from '@/lib/utils';
 
 interface TableRow {
   qNo: string;
@@ -25,27 +26,34 @@ interface ExtractionResult {
     bubbleDigits: number;
   };
   isValid: boolean;
+  imageId: string;
+  imageName: string;
 }
 
 const Index = () => {
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [images, setImages] = useState<ImageItem[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStage, setProcessingStage] = useState<'scanning' | 'extracting' | 'validating' | 'complete'>('scanning');
-  const [result, setResult] = useState<ExtractionResult | null>(null);
+  const [processingProgress, setProcessingProgress] = useState({ current: 0, total: 0 });
+  const [results, setResults] = useState<ExtractionResult[]>([]);
+  const [currentResultIndex, setCurrentResultIndex] = useState(0);
   const resultCanvasRef = useRef<ResultCanvasRef>(null);
   const { toast } = useToast();
 
-  const handleImageSelect = (file: File, preview: string) => {
-    setImageFile(file);
-    setImagePreview(preview);
-    setResult(null);
+  const handleImagesSelect = (newImages: ImageItem[]) => {
+    setImages(newImages);
+    setResults([]);
+    setCurrentResultIndex(0);
+  };
+
+  const handleRemoveImage = (id: string) => {
+    setImages(prev => prev.filter(img => img.id !== id));
   };
 
   const handleClear = () => {
-    setImageFile(null);
-    setImagePreview(null);
-    setResult(null);
+    setImages([]);
+    setResults([]);
+    setCurrentResultIndex(0);
   };
 
   const fileToBase64 = (file: File): Promise<string> => {
@@ -57,27 +65,10 @@ const Index = () => {
     });
   };
 
-
-  const handleExtract = async () => {
-    if (!imageFile) {
-      toast({
-        title: 'No image selected',
-        description: 'Please upload an image first',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    setIsProcessing(true);
-    setProcessingStage('scanning');
-
+  const processImage = async (image: ImageItem): Promise<ExtractionResult | null> => {
     try {
-      // Convert image to base64
-      const imageBase64 = await fileToBase64(imageFile);
+      const imageBase64 = await fileToBase64(image.file);
       
-      setProcessingStage('extracting');
-      
-      // Call the edge function for real OCR
       const { data, error } = await supabase.functions.invoke('extract-document', {
         body: { imageBase64 }
       });
@@ -90,9 +81,6 @@ const Index = () => {
         throw new Error(data.error);
       }
 
-      setProcessingStage('validating');
-      
-      // Normalize table data
       const tableData = (data.tableData || []).map((row: any) => ({
         qNo: String(row.qNo || ''),
         a: String(row.a || ''),
@@ -101,7 +89,6 @@ const Index = () => {
         total: String(row.total || ''),
       }));
 
-      // Calculate sum from table
       const calculatedSum = tableData.reduce((sum: number, row: TableRow) => {
         const total = parseInt(row.total) || 0;
         return sum + total;
@@ -109,15 +96,9 @@ const Index = () => {
 
       const writtenTotal = parseInt(data.writtenTotal) || 0;
       const bubbleDigits = parseInt(data.bubbleDigits) || 0;
-
-      await new Promise(r => setTimeout(r, 500));
-      setProcessingStage('complete');
-      
-      await new Promise(r => setTimeout(r, 300));
-
       const isValid = calculatedSum === bubbleDigits;
 
-      setResult({
+      return {
         headerInfo: data.headerInfo || {},
         tableData,
         totalMarks: {
@@ -126,25 +107,68 @@ const Index = () => {
           bubbleDigits: bubbleDigits,
         },
         isValid,
-      });
-
-      toast({
-        title: isValid ? 'Extraction Complete' : 'Validation Warning',
-        description: isValid 
-          ? 'Document processed successfully. All totals match!'
-          : 'Document processed but totals do not match. Please review.',
-        variant: isValid ? 'default' : 'destructive',
-      });
-
+        imageId: image.id,
+        imageName: image.file.name,
+      };
     } catch (error) {
-      console.error('Extraction error:', error);
+      console.error(`Error processing ${image.file.name}:`, error);
+      return null;
+    }
+  };
+
+  const handleExtract = async () => {
+    if (images.length === 0) {
       toast({
-        title: 'Extraction Failed',
-        description: error instanceof Error ? error.message : 'Failed to process the document. Please try again.',
+        title: 'No images selected',
+        description: 'Please upload at least one image',
         variant: 'destructive',
       });
-    } finally {
-      setIsProcessing(false);
+      return;
+    }
+
+    setIsProcessing(true);
+    setProcessingStage('scanning');
+    setProcessingProgress({ current: 0, total: images.length });
+    setResults([]);
+
+    const extractedResults: ExtractionResult[] = [];
+    let failedCount = 0;
+
+    for (let i = 0; i < images.length; i++) {
+      setProcessingProgress({ current: i + 1, total: images.length });
+      setProcessingStage(i === 0 ? 'scanning' : 'extracting');
+
+      const result = await processImage(images[i]);
+      if (result) {
+        extractedResults.push(result);
+      } else {
+        failedCount++;
+      }
+    }
+
+    setProcessingStage('validating');
+    await new Promise(r => setTimeout(r, 300));
+    setProcessingStage('complete');
+    await new Promise(r => setTimeout(r, 200));
+
+    setResults(extractedResults);
+    setCurrentResultIndex(0);
+    setIsProcessing(false);
+
+    const validCount = extractedResults.filter(r => r.isValid).length;
+    
+    if (extractedResults.length === 0) {
+      toast({
+        title: 'Extraction Failed',
+        description: 'Failed to process any images. Please try again.',
+        variant: 'destructive',
+      });
+    } else {
+      toast({
+        title: `Processed ${extractedResults.length} of ${images.length} images`,
+        description: `${validCount} passed validation${failedCount > 0 ? `, ${failedCount} failed to process` : ''}`,
+        variant: validCount === extractedResults.length ? 'default' : 'destructive',
+      });
     }
   };
 
@@ -156,9 +180,30 @@ const Index = () => {
     });
   };
 
+  const handleDownloadAll = async () => {
+    toast({
+      title: 'Downloading all results',
+      description: `Preparing ${results.length} images...`,
+    });
+    
+    // Download each result with a small delay
+    for (let i = 0; i < results.length; i++) {
+      setCurrentResultIndex(i);
+      await new Promise(r => setTimeout(r, 300)); // Wait for canvas to render
+      resultCanvasRef.current?.downloadImage(results[i].imageName);
+    }
+  };
+
+  const currentResult = results[currentResultIndex];
+
   return (
     <div className="min-h-screen bg-background">
-      {isProcessing && <ProcessingOverlay stage={processingStage} />}
+      {isProcessing && (
+        <ProcessingOverlay 
+          stage={processingStage} 
+          progress={processingProgress}
+        />
+      )}
       
       {/* Hero Section */}
       <div className="relative overflow-hidden">
@@ -189,14 +234,15 @@ const Index = () => {
                     <FileText className="w-5 h-5 text-primary" />
                   </div>
                   <div>
-                    <h2 className="text-lg font-semibold text-foreground">Upload Document</h2>
-                    <p className="text-sm text-muted-foreground">Upload an image to extract data</p>
+                    <h2 className="text-lg font-semibold text-foreground">Upload Documents</h2>
+                    <p className="text-sm text-muted-foreground">Upload one or multiple images</p>
                   </div>
                 </div>
 
                 <ImageUploader 
-                  onImageSelect={handleImageSelect}
-                  preview={imagePreview}
+                  onImagesSelect={handleImagesSelect}
+                  images={images}
+                  onRemove={handleRemoveImage}
                   onClear={handleClear}
                 />
 
@@ -206,12 +252,12 @@ const Index = () => {
                     size="lg" 
                     className="flex-1"
                     onClick={handleExtract}
-                    disabled={!imageFile || isProcessing}
+                    disabled={images.length === 0 || isProcessing}
                   >
                     <Sparkles className="w-4 h-4" />
-                    Extract Data
+                    Extract {images.length > 1 ? `All (${images.length})` : 'Data'}
                   </Button>
-                  {result && (
+                  {results.length > 0 && (
                     <Button 
                       variant="outline" 
                       size="lg"
@@ -227,21 +273,78 @@ const Index = () => {
 
             {/* Right Column - Results */}
             <div className="space-y-6">
-              {result ? (
+              {results.length > 0 && currentResult ? (
                 <>
-                  <ExtractedData {...result} />
+                  {/* Navigation for multiple results */}
+                  {results.length > 1 && (
+                    <div className="glass rounded-xl p-4 flex items-center justify-between">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setCurrentResultIndex(i => Math.max(0, i - 1))}
+                        disabled={currentResultIndex === 0}
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                        Previous
+                      </Button>
+                      
+                      <div className="flex items-center gap-2">
+                        {results.map((r, idx) => (
+                          <button
+                            key={r.imageId}
+                            onClick={() => setCurrentResultIndex(idx)}
+                            className={cn(
+                              "w-2.5 h-2.5 rounded-full transition-all",
+                              idx === currentResultIndex 
+                                ? "bg-primary scale-125" 
+                                : r.isValid 
+                                  ? "bg-success/50 hover:bg-success" 
+                                  : "bg-destructive/50 hover:bg-destructive"
+                            )}
+                          />
+                        ))}
+                      </div>
+                      
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setCurrentResultIndex(i => Math.min(results.length - 1, i + 1))}
+                        disabled={currentResultIndex === results.length - 1}
+                      >
+                        Next
+                        <ChevronRight className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  )}
+
+                  <div className="text-sm text-muted-foreground text-center">
+                    <span className="font-medium text-foreground">{currentResult.imageName}</span>
+                    {results.length > 1 && (
+                      <span> • {currentResultIndex + 1} of {results.length}</span>
+                    )}
+                  </div>
+
+                  <ExtractedData {...currentResult} />
                   
                   <div className="glass rounded-2xl p-6">
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-lg font-semibold text-foreground">Result Image</h3>
-                      <Button variant="default" size="sm" onClick={handleDownload}>
-                        <Download className="w-4 h-4" />
-                        Download
-                      </Button>
+                      <div className="flex gap-2">
+                        {results.length > 1 && (
+                          <Button variant="outline" size="sm" onClick={handleDownloadAll}>
+                            <Download className="w-4 h-4" />
+                            All ({results.length})
+                          </Button>
+                        )}
+                        <Button variant="default" size="sm" onClick={handleDownload}>
+                          <Download className="w-4 h-4" />
+                          Download
+                        </Button>
+                      </div>
                     </div>
                     <ResultCanvas 
                       ref={resultCanvasRef}
-                      {...result}
+                      {...currentResult}
                     />
                   </div>
                 </>
@@ -254,7 +357,7 @@ const Index = () => {
                     No Results Yet
                   </h3>
                   <p className="text-muted-foreground max-w-sm">
-                    Upload a document image and click "Extract Data" to see the extracted information here.
+                    Upload document images and click "Extract Data" to see the extracted information here.
                   </p>
                 </div>
               )}
